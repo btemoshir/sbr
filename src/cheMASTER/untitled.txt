@@ -1,0 +1,710 @@
+import numpy as np
+import scipy as sc
+from scipy.integrate import odeint
+import sys
+import os
+import itertools as it
+import math
+from tqdm import tqdm
+from scipy.stats import poisson
+
+class chemical_system_class:
+    
+    """ 
+    Class with methods on it to set up the chemical system and run dynamics on it. 
+    
+    Parameters
+    -----------    
+    - num_int : int 
+                Number of interacting reactions over the baseline
+    - num_species : int
+                Total number of reaction species in the system
+    - rxn_par : list of floats
+                A list of length 3 of arrays with the first array as all the creation rates of the baseline, the second as the destruction rate of the baseline and the third array with the rates of the interaction reactions (the length of first two must be equal to num_sepcies and of the third must be equal to num_int)                
+    - r_i : list of int
+                A list of list with length = num_int. Each sublist has length = num_species. This list defines the stochiometric coefficients of all the species being destroyed (reactant) as a result of the interaction reactions in order of the rates defined in rxn_par[2]
+    - s_i : list of int
+            Same as r_i but for the species being created (product) in the interaction reactions.
+    
+    Author: Moshir Harsh
+    btemoshir@gmail.com
+    
+    """
+    
+    def __init__(self,num_int,num_species,rxn_par,r_i,s_i):
+        
+        # Assign the numbers to the initial value
+        self.num_species   = num_species
+        self.num_int       = num_int
+        self.r_i           = r_i
+        self.s_i           = s_i
+        self.num_reactions = 2*num_species + num_int        
+        
+        # Assign reaction parameters
+        self.k1 = rxn_par[0]
+        self.k2 = rxn_par[1]
+        self.k3 = rxn_par[2]
+    
+    def initialize_dynamics(self,initial_values,startTime,endTime,delta_t,ext_time_grid = None):
+        
+        """
+        Initializes the dynamics. Arguments self explanatory.
+        
+        Parameters
+        ----------
+        - initial_values : array of floats
+                    Initial average values of the different species
+        - startTime      : float
+                    Start time
+        - endTime : float
+                    End Times
+        - delta_t : float
+                    Time step
+        - ext_time_grid : array of floats (default = None)
+                    When an external (non-uniform) time grid needs to specified
+                         
+        """
+        
+        time_grid     = np.arange(startTime,endTime,delta_t)
+        self.y        = np.zeros([self.num_species,len(time_grid)])
+        self.y[:,0]   = initial_values
+        self.i        = 0
+        
+        if ext_time_grid is None:
+            
+            self.timeGrid = time_grid
+            self.t        = 0.
+            self.delta_t  = delta_t
+            
+        else:
+            self.timeGrid = ext_time_grid
+            self.t        = 0.
+        
+    
+
+    def masterOperator(self,max_num=10):
+    
+        """
+        This function creates the master operator by restricting the state space to a maximum number of particles. The size of the state space is then = (max_num of A)*(max_num of B)....
+        
+        Parameters
+        ----------
+        - max_num : int or array of int
+                    The maximum number of particles or the maximum size for the support of the probability distribution. If int, the same value is used for all species and specific values for each species can be passed as an array otherwise.        
+        
+        """
+        
+        try:
+            len(max_num)
+        except:
+            max_num = np.zeros(self.num_species) + max_num
+        
+        state_space = list(it.product(*list(np.arange(max_num[j]) for j in range(self.num_species))))
+        
+        for j in range(len(state_space)):
+            state_space[j] = list(state_space[j])
+        
+        master = np.zeros([len(state_space),len(state_space)])
+                
+        for i in state_space:
+            
+            for j in range(self.num_species):
+                    
+                t     = i[:]
+                t[j] += 1
+
+                if t[j]-max_num[j] < 0:
+                    master[state_space.index(i),state_space.index(t)] += self.k2[j]*state_space[state_space.index(t)][j]
+                    
+                t     = i[:]
+                t[j] -= 1
+
+                if t[j] >= 0:
+                    master[state_space.index(i),state_space.index(t)] += self.k1[j]
+                    
+            for k in range(self.num_int):
+                    
+                if all([(state_space[0][m] - i[m] + self.s_i[k][m] - self.r_i[k][m]) <= 0 for m in range(len(i))] ) and all([(state_space[-1][m] - i[m] + self.s_i[k][m] - self.r_i[k][m]) >=0 for m in range(len(i))] ):
+                    
+                    x = self.alpha*self.k3[k]
+                    for n in range(self.num_species):
+                        for p in range(int(self.r_i[k][n])):
+                            x *= (state_space[state_space.index([(i[m] - self.s_i[k][m] + self.r_i[k][m]) for m in range(len(i))])][n]-p)
+                    
+                    master[state_space.index(i),state_space.index([(i[m] - self.s_i[k][m] + self.r_i[k][m]) for m in range(len(i))])] += x
+        
+        np.fill_diagonal(master,-np.sum(master,axis=0))
+        
+        self.master = master
+        self.master_stateSpace = state_space
+        self.master_maxNum = max_num
+
+    def SteadyState_masterOP(self,max_num=10):
+        
+        """
+        This outputs the steady state from the probability distribution found by the top Eigenvector of the Master Operator.
+        
+        Paramters
+        ---------
+        - max_num : int or array of int
+                    The maximum number of particles or the maximum size for the support of the probability distribution. If int, the same value is used for all species and specific values for each species can be passed as an array otherwise.
+        
+        Returns
+        --------
+        
+        - evalue : the eigenvalues of the master oeprator
+        
+        - evector : the eigenvectors corressponding to those eigenvalues
+        
+        """
+        
+        try:
+            self.master
+        except:
+            self.masterOperator(max_num)
+            
+        evalue,evector = np.linalg.eig(self.master)
+        x = np.zeros(self.num_species)
+        
+        for j in range(self.num_species):
+            x[j] = np.sum(np.array(self.master_stateSpace)[:,j]* np.abs(evector[:,np.argmax(evalue)]))/np.sum(np.abs(evector[:,np.argmax(evalue)]))
+        
+        self.ss_masterOP = x
+        
+        return evalue,evector
+
+
+
+    def runDynamics_masterOP(self,max_num=10,method='Euler',variance=False,crossCorrelator=None,selfCorrelator_tau=None, crossCorrelator_tau=None, measureResponse=None, measureResponse_full=None, measureResponse_finite=None, measureResponse_finite_cross=None,initialization='poisson',initialization_par=None):
+        
+        """
+        Run the dynamics of the probability distribution dP/dt = MP where M is the master operator, and outputs the mean for each species. Method is the integration method. Default is Euler first order, other options are RK2 and RK4. Initialization and initialization_par are for choosing other probability distributions and to pass extra parameters to it!
+        """
+        
+        # We define some helper functions here which will help us later.
+        
+        def calculate_mean(self,p):
+            
+            """
+            Calculates the mean number for any given p for all species.
+            """
+            
+            x = np.zeros(self.num_species)
+            
+            for j in range(self.num_species):
+                x[j] = np.sum(np.array(self.master_stateSpace)[:,j]*np.abs(p),axis=0)/np.sum(np.abs(p))
+            
+            return x
+        
+        def calculate_secondMoment(self,p):
+            
+            """
+            Calculates the second moment of the number distribution for p.
+            """
+            
+            x = np.zeros(self.num_species)
+            
+            for j in range(self.num_species):
+                x[j] = np.sum(np.array(self.master_stateSpace)[:,j]**2*np.abs(p),axis=0)/np.sum(np.abs(p))
+            
+            return x
+        
+        def calculate_crossCorrelator(self,p,crossC):
+            
+            """
+            Calculates the number cross correclation between two species crossC[0] and crossC[1] for given p at a given time.
+            """
+            
+            return np.sum(np.array(self.master_stateSpace)[:,crossC[0]]*np.array(self.master_stateSpace)[:,crossC[1]]*np.abs(p),axis=0)/np.sum(np.abs(p))        
+        
+        
+        def wrapper(t,y):
+            return dpdt(t,y,self.master)
+        
+        def dpdt(t,y,master):
+            return np.matmul(master,y)
+        
+        
+        
+        try:
+            len(max_num)
+        except:
+            max_num = np.zeros(self.num_species) + max_num
+        
+        try:
+            self.master
+        except:
+            self.masterOperator(max_num)
+            
+        if variance:
+            self.variance = np.zeros([self.num_species,len(self.timeGrid)])
+        
+        if crossCorrelator is not None:
+            self.crossC = np.zeros(len(self.timeGrid))
+            
+        if measureResponse is not None:
+            # Measures the Response function by creating perturbation in the creation rate by changing it to k1*measureResponse, and then going to the original k1            
+            self.Response = np.zeros([self.num_species,len(self.timeGrid),len(self.timeGrid)])
+            
+        if measureResponse_full is not None:
+            # Measures the Response function by creating perturbation in the creation rate by changing it to k1*measureResponse.
+            self.Response = np.zeros([self.num_species,len(self.timeGrid),len(self.timeGrid)])
+        
+        if measureResponse_finite is not None:
+            # Measures the Response function by creating perturbation in the creation rate for a time measureResponse_finite[1] by changing it to k1*measureResponse and then setting it back to the original value.
+            
+            self.Response = np.zeros([self.num_species,len(self.timeGrid),len(self.timeGrid)])
+            
+        if measureResponse_finite_cross is not None:
+            # Measures the Response function by creating perturbation in the creation rate for a time measureResponse_finite[1] by changing it to k1*measureResponse and then setting it back to the original value.
+            
+            self.Response = np.zeros([self.num_species,self.num_species,len(self.timeGrid),len(self.timeGrid)])
+        
+        
+        init_dist = self.stateSpace_initialDistribution(self.master_maxNum,initialization=initialization, initialization_par=initialization_par)
+        
+        p = init_dist[:]
+        
+        if selfCorrelator_tau is not None:
+            
+            # To calculate the self correlator as a function of time lag \tau, we need to store this value for all solution times and for all lag times
+            
+            correlator_tau = np.zeros([self.num_species,len(self.timeGrid),len(self.timeGrid)])
+            
+        if crossCorrelator_tau is not None:
+            
+            # To calculate the cross correlator as a function of time lag \tau, we need to store this value for all solution times and for all lag times and for pairs of species. Use only one of selfCorrelator_tau or crossCorrelator_tau
+            
+            correlator_tau = np.zeros([self.num_species,self.num_species,len(self.timeGrid),len(self.timeGrid)])
+        
+        if method == 'Euler':
+            
+            with tqdm(total=len(self.timeGrid)) as pbar:
+                self.y[:,self.i] = calculate_mean(self,p)
+                if selfCorrelator_tau is not None:
+                    p_full[:,self.i] = p               
+                pbar.update(1)
+                
+                if measureResponse is not None:
+                    k1_true = np.copy(self.k1)
+                    master_true = np.copy(self.master)
+                    self.k1 = self.k1*measureResponse
+                    self.masterOperator(max_num)
+
+                    tau = self.i
+                    q = np.copy(p)
+                    q = np.matmul((self.master-master_true)/(k1_true*(measureResponse-1)),q)
+
+                    while tau < len(self.timeGrid):
+                        self.Response[:,tau,self.i] = calculate_mean(self,q)
+                        #self.Response[:,tau,self.i] = calculate_mean(self,q)/(k1_true*(measureResponse-1))
+                        q += self.delta_t*np.matmul(master_true,q)
+                        #q += self.delta_t*np.matmul(self.master,q)
+                        tau += 1
+                    self.k1 = k1_true
+                    self.masterOperator(max_num)
+                    
+                if measureResponse_full is not None:
+                    k1_true = np.copy(self.k1)
+                    master_true = np.copy(self.master)
+                    self.k1 = self.k1*measureResponse_full
+                    self.masterOperator(max_num)
+
+                    tau = self.i
+                    q = np.copy(p)
+                    
+                    while tau < len(self.timeGrid):
+                        self.Response[:,tau,self.i] = calculate_mean(self,q)
+                        q += self.delta_t*np.matmul(self.master,q)
+                        tau += 1
+                        
+                    self.k1 = k1_true
+                    self.masterOperator(max_num)
+                    
+                if measureResponse_finite is not None:
+                    k1_true = np.copy(self.k1)
+                    master_true = np.copy(self.master)
+                    self.k1 = self.k1*measureResponse_finite[0]
+                    self.masterOperator(max_num)
+
+                    tau = self.i
+                    q = np.copy(p)
+                    
+                    while tau-self.i < measureResponse_finite[1] and tau < len(self.timeGrid):
+                        #propogate the perturbed solution only for the given time measureResponse_finite[1]
+                        self.Response[:,tau,self.i] = calculate_mean(self,q)
+                        q += self.delta_t*np.matmul(self.master,q)
+                        tau += 1
+                        
+                    while tau < len(self.timeGrid):
+                        #propagate the original solution
+                        self.Response[:,tau,self.i] = calculate_mean(self,q)
+                        q += self.delta_t*np.matmul(master_true,q)
+                        tau += 1
+                        
+                    self.k1 = k1_true
+                    self.masterOperator(max_num)
+                    
+                if measureResponse_finite_cross is not None:
+                    k1_true = self.k1.copy()
+                    master_true = np.copy(self.master)
+                    
+                    for j1 in range(self.num_species):
+                        
+                        temp = np.ones(self.num_species)
+                        temp[j1] = measureResponse_finite_cross[0]
+                        self.k1 = k1_true*temp
+                        self.masterOperator(max_num)
+                        # j1 is the species who's creation rate has been perturbed
+
+                        tau = self.i
+                        q = np.copy(p)
+
+                        while tau-self.i < measureResponse_finite_cross[1] and tau < len(self.timeGrid):
+                            #propogate the perturbed solution only for the given time measureResponse_finite[1]
+                            self.Response[:,j1,tau,self.i] = calculate_mean(self,q)
+                            q += self.delta_t*np.matmul(self.master,q)
+                            tau += 1
+
+                        while tau < len(self.timeGrid):
+                            #propagate the original solution
+                            self.Response[:,j1,tau,self.i] = calculate_mean(self,q)
+                            q += self.delta_t*np.matmul(master_true,q)
+                            tau += 1
+
+                        self.k1 = k1_true
+                        self.masterOperator(max_num)
+                
+                while self.i < len(self.timeGrid)-1:
+                    p += self.delta_t*np.matmul(self.master,p)
+                    self.y[:,self.i+1] = calculate_mean(self,p)
+                    #if selfCorrelator_tau is not None:
+                    #    p_full[:,self.i+1] = p
+                    if variance:
+                        self.variance[:,self.i+1] = calculate_secondMoment(self,p) - self.y[:,self.i+1]**2
+                    
+                    if crossCorrelator is not None:
+                        self.crossC[self.i+1] = calculate_crossCorrelator(self,p,crossCorrelator) - self.y[crossCorrelator[0],self.i+1]*self.y[crossCorrelator[1],self.i+1]
+                        
+                    if measureResponse_full is not None:
+                        k1_true = np.copy(self.k1)
+                        master_true = np.copy(self.master)
+                        self.k1 = self.k1*measureResponse_full
+                        self.masterOperator(max_num)
+
+                        tau = self.i+1
+                        q = np.copy(p)
+                        while tau < len(self.timeGrid):
+                            self.Response[:,tau,self.i+1] = calculate_mean(self,q)
+                            q += self.delta_t*np.matmul(self.master,q)
+                            tau += 1
+
+                        self.k1 = k1_true
+                        self.masterOperator(max_num)
+                        
+                    if measureResponse is not None:
+                        k1_true = np.copy(self.k1)
+                        master_true = np.copy(self.master)
+                        self.k1 = self.k1*measureResponse
+                        self.masterOperator(max_num)
+                        
+                        tau = self.i+1
+                        q = np.copy(p)
+                        q = np.matmul((self.master-master_true)/(k1_true*(measureResponse-1)),q)
+                        while tau < len(self.timeGrid):
+                            self.Response[:,tau,self.i+1] = calculate_mean(self,q)
+                            #self.Response[:,tau,self.i+1] = calculate_mean(self,q)/(k1_true*(measureResponse-1))
+                            q += self.delta_t*np.matmul(master_true,q)
+                            #q += self.delta_t*np.matmul(self.master,q)
+                            tau += 1
+                        self.k1 = k1_true
+                        self.masterOperator(max_num)
+                        
+                    if measureResponse_finite is not None:
+                        k1_true = np.copy(self.k1)
+                        master_true = np.copy(self.master)
+                        self.k1 = self.k1*measureResponse_finite[0]
+                        self.masterOperator(max_num)
+
+                        tau = self.i+1
+                        q = np.copy(p)
+
+                        while tau-self.i-1 < measureResponse_finite[1] and tau < len(self.timeGrid):
+                            #propogate the perturbed solution only for the given time measureResponse_finite[1]
+                            self.Response[:,tau,self.i+1] = calculate_mean(self,q)
+                            q += self.delta_t*np.matmul(self.master,q)
+                            tau += 1
+
+                        while tau < len(self.timeGrid):
+                            #propagate the original solution
+                            self.Response[:,tau,self.i+1] = calculate_mean(self,q)
+                            q += self.delta_t*np.matmul(master_true,q)
+                            tau += 1
+
+                        self.k1 = k1_true
+                        self.masterOperator(max_num)
+                        
+                    if measureResponse_finite_cross is not None:
+                        k1_true = self.k1.copy()
+                        master_true = np.copy(self.master)
+                        
+                        for j1 in range(self.num_species):
+                            temp = np.ones(self.num_species)
+                            temp[j1] = measureResponse_finite_cross[0]
+                            self.k1 = k1_true*temp
+                            
+                            self.masterOperator(max_num)
+                            
+                            tau = self.i+1
+                            q = np.copy(p)
+
+                            while tau-self.i-1 < measureResponse_finite_cross[1] and tau < len(self.timeGrid):
+                                #propogate the perturbed solution only for the given time measureResponse_finite[1]
+                                self.Response[:,j1,tau,self.i+1] = calculate_mean(self,q)
+                                q += self.delta_t*np.matmul(self.master,q)
+                                tau += 1
+
+                            while tau < len(self.timeGrid):
+                                #propagate the original solution
+                                self.Response[:,j1,tau,self.i+1] = calculate_mean(self,q)
+                                q += self.delta_t*np.matmul(master_true,q)
+                                tau += 1
+
+                            self.k1 = k1_true
+                            self.masterOperator(max_num)
+                                                
+                    self.i += 1
+                    self.t += self.delta_t
+                    pbar.update(1)
+                    
+            if measureResponse_full is not None:
+                for k in range(len(self.timeGrid)):
+                    l = k
+                    while l < len(self.timeGrid):
+                        self.Response[:,l,k] = (self.Response[:,l,k] - self.y[:,l])/(k1_true*(measureResponse_full-1))
+                        l += 1
+                        
+            if measureResponse_finite is not None:
+                for k in range(len(self.timeGrid)):
+                    l = k
+                    while l < len(self.timeGrid):
+                        self.Response[:,l,k] = (self.Response[:,l,k] - self.y[:,l])/(k1_true*(measureResponse_finite[0]-1))/(measureResponse_finite[1]*self.delta_t)
+                        l += 1
+                        
+            if measureResponse_finite_cross is not None:
+                for k in range(len(self.timeGrid)):
+                    l = k
+                    while l < len(self.timeGrid):
+                        for j1 in range(self.num_species):
+                            for j2 in range(self.num_species):
+                                self.Response[j1,j2,l,k] = (self.Response[j1,j2,l,k] - self.y[j1,l])/(k1_true[j2]*(measureResponse_finite_cross[0]-1))/(measureResponse_finite_cross[1]*self.delta_t)
+                        l += 1
+            
+        if method == 'RK2':
+
+            sol = sc.integrate.solve_ivp(wrapper,(self.timeGrid[0],self.timeGrid[-1]),init_dist,method='RK23',t_eval=self.timeGrid,dense_output=False)
+
+            with tqdm(total=len(self.timeGrid)) as pbar:
+                while self.i < len(self.timeGrid):
+                    self.y[:,self.i] = calculate_mean(self,sol.y[:,self.i])
+                    #if selfCorrelator_tau is not None:
+                    #    p_full[:,self.i] = sol.y[:,self.i]
+                    if variance:
+                        self.variance[:,self.i] = calculate_secondMoment(self,p) - self.y[:,self.i]**2
+                    if crossCorrelator is not None:
+                        self.crossC[self.i] = calculate_crossCorrelator(self,p,crossCorrelator) - self.y[crossCorrelator[0],self.i]*self.y[crossCorrelator[1],self.i]
+                        
+                    self.i += 1
+                    self.t += self.delta_t
+
+                    pbar.update(1)
+
+        if method == 'RK4':
+
+            sol = sc.integrate.solve_ivp(wrapper,(self.timeGrid[0],self.timeGrid[-1]),init_dist,method='RK45',t_eval=self.timeGrid,dense_output=False)
+
+            with tqdm(total=len(self.timeGrid)) as pbar:
+                while self.i < len(self.timeGrid):
+                    self.y[:,self.i] = calculate_mean(self,sol.y[:,self.i])
+                    #if selfCorrelator_tau is not None:
+                    #    p_full[:,self.i] = sol.y[:,self.i]
+                    if variance:
+                        self.variance[:,self.i] = calculate_secondMoment(self,p) - self.y[:,self.i]**2
+                    if crossCorrelator is not None:
+                        self.crossC[self.i] = calculate_crossCorrelator(self,p,crossCorrelator) - self.y[crossCorrelator[0],self.i]*self.y[crossCorrelator[1],self.i]
+                    
+                    self.i += 1
+                    self.t += self.delta_t
+
+                    pbar.update(1)
+                    
+        if method == 'Eigenvalue':
+            
+            evalue,evRight = np.linalg.eig(self.master)
+            #evalue,evLeft,evRight = sc.linalg.eig(self.master,left=True,right=True)
+            #print(evLeft)
+            evLeft         = np.linalg.inv(evRight)
+            ini_proj       = np.matmul(evLeft,init_dist)
+            self.evLeft    = evLeft
+            self.evRight   = evRight
+            
+            with tqdm(total=len(self.timeGrid)) as pbar:
+                
+                if measureResponse is not None:
+                    k1_true     = np.copy(self.k1)
+                    master_true = np.copy(self.master)
+                    self.k1     = self.k1*measureResponse
+                    self.masterOperator(max_num)
+                    
+                    evalue_new,evRight_new = np.linalg.eig((self.master-master_true)/(k1_true*(measureResponse-1)))
+                    #evalue_new,evLeft_new,evRight_new = sc.linalg.eig((self.master-master_true)/(k1_true*(measureResponse-1)),left=True,right=True)
+                    #evLeft_new             = np.linalg.inv(evRight_new)
+                    #ini_proj               = np.matmul(evLeft,init_dist)
+
+                    tau = self.i
+                    q   = np.copy(p)
+                    q   = np.matmul((self.master-master_true)/(k1_true*(measureResponse-1)),q)
+
+                    while tau < len(self.timeGrid):
+                        self.Response[:,tau,self.i] = calculate_mean(self,q)
+                        q += self.delta_t*np.matmul(master_true,q)
+                        tau += 1
+                    self.k1 = k1_true
+                    self.masterOperator(max_num)
+                
+                while self.i < len(self.timeGrid):
+                    #if self.i > 0:
+                       
+                    # TODO: Implement less matrix multiplication here, will be faster
+                    p = np.real(np.matmul(evRight, np.matmul( np.identity(len(evalue))* np.exp(evalue*self.timeGrid[self.i]), ini_proj)))
+
+                    #print(p)
+                    self.y[:,self.i] = calculate_mean(self,p)
+
+                    if selfCorrelator_tau is not None:
+                        Q = []
+
+                        for j in range(self.num_species):
+                            Q.append(np.array(self.master_stateSpace)[:,j]*p)
+
+                        tau = 0
+
+                        while tau+self.i<len(self.timeGrid):
+                            if selfCorrelator_tau == 'connected':
+                                y_ = calculate_mean(self,np.real(np.matmul(evRight, np.matmul( np.identity(len(evalue))* np.exp(evalue*self.timeGrid[self.i+tau]), ini_proj)))) 
+
+                            for j in range(self.num_species):
+
+                                correlator_tau[j,tau,self.i] = np.sum(np.array(self.master_stateSpace)[:,j]*Q[j],axis=0)
+
+                                if selfCorrelator_tau == 'connected':
+
+                                    correlator_tau[j,tau,self.i] -= self.y[j,self.i]*y_[j]
+
+
+                                Q[j] = np.real(np.matmul(evRight,np.matmul(np.identity(len(evalue))*np.exp(evalue*self.delta_t),np.matmul(evLeft,Q[j]))))
+
+                            tau += 1
+
+                    if crossCorrelator_tau is not None:
+                        Q = []
+
+                        for j in range(self.num_species):
+                            Q.append(np.array(self.master_stateSpace)[:,j]*p)
+
+                        tau = 0
+
+                        while tau+self.i<len(self.timeGrid):
+                            if crossCorrelator_tau == 'connected':
+                                y_ = calculate_mean(self,np.real(np.matmul(evRight, np.matmul( np.identity(len(evalue))* np.exp(evalue*self.timeGrid[self.i+tau]), ini_proj)))) 
+
+                            for j in range(self.num_species):
+                                for j1 in range(self.num_species):
+
+                                    correlator_tau[j,j1,tau,self.i] = np.sum(np.array(self.master_stateSpace)[:,j1]*Q[j],axis=0)
+
+                                    if crossCorrelator_tau == 'connected':
+
+                                        correlator_tau[j,j1,tau,self.i] -= self.y[j,self.i]*y_[j1]
+                                        # species j1 is at time tau+self.i and species j at time self.i
+
+                                Q[j] = np.real(np.matmul(evRight,np.matmul(np.identity(len(evalue))*np.exp(evalue*self.delta_t),np.matmul(evLeft,Q[j]))))
+
+                            tau += 1
+
+                    if variance:
+                        self.variance[:,self.i] = calculate_secondMoment(self,p) - self.y[:,self.i]**2
+
+                    if crossCorrelator is not None:
+                        self.crossC[self.i] = calculate_crossCorrelator(self,p,crossCorrelator) - self.y[crossCorrelator[0],self.i]*self.y[crossCorrelator[1],self.i]
+
+                    self.i += 1
+                    self.t += self.delta_t
+
+                    pbar.update(1)
+                
+                # TODO: Implement the operator that counts the mean number of molecules
+        
+        if selfCorrelator_tau is not None:
+            self.correlator_tau = correlator_tau
+            
+        if crossCorrelator_tau is not None:
+            self.correlator_tau = correlator_tau
+            
+            
+    def calculate_selfCorrelator_tau(self,p,tau):
+        
+        # TODO
+        
+        """
+        Calculates the self Correlator as a function of lag time \tau in time Grid index values. Takes the full probability matrix p of the state_space_size*time_grid_length
+        """
+        
+        
+            
+        #x = np.zeros([self.num_species,len(self.timeGrid)-tau])
+
+        #for j in range(self.num_species):
+        #    for time in range(np.shape(x)[1]):
+        #        x[j,time] = np.sum(np.array(self.master_stateSpace)[:,j]**2*np.abs(p[:,time])*np.abs(p[:,time+tau]), axis=0)/np.sum(np.abs(p[:,time])*np.abs(p[:,time+tau]))
+
+        return x
+    
+    
+        
+
+    
+    def stateSpace_initialDistribution(self,max_num=10,initialization='poisson',initialization_par=None):
+        
+        try:
+            len(max_num)
+        except:
+            max_num = np.zeros(self.num_species) + max_num
+        
+        try:
+            self.master_stateSpace
+        except:
+            self.masterOperator(self,max_num)
+            
+            
+        if initialization == 'poisson':
+            p = np.ones(len(self.master_stateSpace))
+            j = 0
+            
+            for i in self.master_stateSpace:
+                for k in range(self.num_species):
+                    p[j] *= poisson.pmf(self.master_stateSpace[j][k],self.y[k,0])    
+                j += 1
+                
+        elif initialization == 'fixed':
+            if any(self.y[:,0]%1):
+                print('error: Use integer valued initialization for all species')
+            else:                
+                p = np.zeros(len(self.master_stateSpace))
+                p[self.master_stateSpace.index(self.y[:,0].astype(int).tolist())] = 1.
+                
+        elif initialization == 'uniform':
+            #Do this
+            p = p
+            
+        return p/np.sum(p)
