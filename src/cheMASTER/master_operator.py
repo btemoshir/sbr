@@ -93,7 +93,7 @@ def SteadyState_masterOP(self,max_num=10):
     try:
         self.master
     except:
-        self.masterOperator(max_num)
+        masterOperator(self,max_num)
 
     evalue,evector = np.linalg.eig(self.master)
     x = np.zeros(self.num_species)

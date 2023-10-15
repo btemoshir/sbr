@@ -23,3 +23,5 @@ from .chemical_system import chemical_system_class
 from .master_operator import (masterOperator,SteadyState_masterOP,stateSpace_initialDistribution)
 
 from .dynamics import (initialize_dynamics,runDynamics)
+
+from .gillespie import (gillespie,gillespie_avg)

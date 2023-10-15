@@ -125,9 +125,6 @@ def perturb_measure_response(self,p,measureResponse,measureResponse_par,max_num)
         
     elif measureResponse == 'finite-cross':
 
-        #k1_true = self.k1.copy()
-        #master_true = np.copy(self.master)
-
         for j1 in range(self.num_species):
 
             temp = np.ones(self.num_species)
