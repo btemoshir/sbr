@@ -13,6 +13,8 @@ import scipy as sc
 
 def emre_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
+    
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     eps         = np.zeros([num_species,len(time_grid)])
@@ -83,6 +85,7 @@ def emre_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_value
 
 def integrate_mak_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -132,6 +135,7 @@ def integrate_mak_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,init
 
 def integrate_alpha2_singleR_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -184,6 +188,7 @@ def integrate_alpha2_singleR_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt
 
 def integrate_alpha2_bare(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -236,6 +241,7 @@ def integrate_alpha2_bare(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,
 
 def integrate_All_bare(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -302,6 +308,7 @@ def integrate_All_bare(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,ini
 
 def integrate_alpha2_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -373,6 +380,7 @@ def integrate_alpha2_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,i
 
 def integrate_All_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
@@ -440,6 +448,7 @@ def integrate_All_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,init
 
 def integrate_All_singleR_ABC(k1,k2,k3,alpha=1.,init_time=0.,final_time=1.,dt=0.001,initial_values=1.):
     
+    num_species = len(initial_values)
     time_grid   = np.arange(init_time,final_time,dt)
     y           = np.zeros([num_species,len(time_grid)])
     y[:,0]      = initial_values
